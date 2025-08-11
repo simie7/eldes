@@ -93,7 +93,7 @@ class EldesCloud:
         data = {
             "email": self._username,
             "password": self._password,
-            "hostDeviceId": ""
+            "hostDeviceId": "HomeAssistant"
         }
 
         url = f"{API_URL}{API_PATHS['AUTH']}login"
