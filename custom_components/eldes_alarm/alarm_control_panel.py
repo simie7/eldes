@@ -136,13 +136,17 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
                 "timestamp": datetime.now(),
             }
 
-            self.hass.bus.async_fire(EVENT_ARM_FAILED, {
-                "entity_id": self.entity_id,
-                "partition_name": self.partition["name"],
-                "partition_id": self.partition["internalId"],
-                "mode": mode,
-                "active_zones": zone_names,
-            })
+            self.hass.bus.async_fire(
+                EVENT_ARM_FAILED,
+                {
+                    "entity_id": self.entity_id,
+                    "partition_name": self.partition["name"],
+                    "partition_id": self.partition["internalId"],
+                    "mode": mode,
+                    "active_zones": zone_names,
+                },
+                context=self._context,
+            )
 
     async def async_alarm_disarm(self, code=None) -> None:
         await self._async_set_alarm(

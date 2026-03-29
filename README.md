@@ -114,17 +114,26 @@ When you arm the alarm and zones are violated (e.g., a door is open), the integr
 
 The WebSocket is only active for ~10 seconds during the arm command and is immediately closed afterwards. It does not maintain a persistent connection.
 
-### Bypass Notification Automation
+### Bypass Notification Automation (Person-Aware)
 
-An example automation is provided in [`docs/automations/bypass_notification.yaml`](docs/automations/bypass_notification.yaml). It uses a single automation with `trigger_id` to handle both:
+An example automation is provided in [`docs/automations/bypass_notification.yaml`](docs/automations/bypass_notification.yaml). It automatically detects **who** tried to arm and sends the notification only to that person's phone.
 
-- **`arm_failed`** -- sends an actionable notification listing the exact open zone names
-- **`bypass_confirmed`** -- calls `retry_arm_with_bypass` when the user taps "Bypass & Arm"
+**How it works:**
+
+1. When someone arms via the HA app, the `eldes_alarm_arm_failed` event carries their HA user context
+2. The automation resolves `user_id` -> `person` entity -> `device_tracker` -> `notify.mobile_app_*`
+3. The notification lists the exact open zone names with "Bypass & Arm" / "Cancel" buttons
+4. Falls back to `notify.notify` (all devices) if the user can't be identified (e.g., armed from keypad)
+
+**Requirements:**
+
+- Each HA user must have a **Person** entity linked to their account (Settings -> People)
+- The person's primary device tracker must come from the **Mobile App** integration (this is the default when using the HA Companion app)
 
 To use it:
 
 1. Copy the automation into the HA automation editor (or `automations.yaml`)
-2. Replace `notify.mobile_app_YOUR_PHONE` with your actual notification service
+2. Verify your person entities have the correct device tracker source (Settings -> People -> click person -> check linked devices)
 3. Reload automations
 
 The notification includes a 60-second timeout, giving you time to read the zone list and decide.

@@ -1,20 +1,33 @@
-# Eldes Alarm — Arm Failed: Bypass Notification
+# Eldes Alarm — Arm Failed: Person-Aware Bypass Notification
 #
-# Single automation with two triggers using trigger_id:
-#   1. arm_failed  — fires when arming fails due to open zones,
-#                    sends actionable notification with exact zone names
-#   2. bypass_confirmed — fires when user taps "Bypass & Arm",
-#                         calls retry_arm_with_bypass (uses stored context)
+# Detects WHO tried to arm (via HA user context), resolves their
+# phone, and sends the notification only to that person.
+# Falls back to notify.notify (all devices) if the user can't
+# be identified (e.g. armed from keypad or external app).
 #
-# SETUP:
-#   Replace "notify.mobile_app_YOUR_PHONE" with your actual notify service
-#   (Settings → Devices → your phone → Notifications)
+# HOW IT WORKS:
+#   1. arm_failed trigger — the integration fires eldes_alarm_arm_failed
+#      with context.user_id from the original service call
+#   2. Jinja2 resolves user_id → person entity → device_tracker (source)
+#      → notify.mobile_app_<device_name>
+#   3. bypass_confirmed trigger — user taps "Bypass & Arm",
+#      calls retry_arm_with_bypass (uses stored context, 120s expiry)
+#
+# REQUIREMENTS:
+#   - Each HA user must have a Person entity linked to their account
+#     (Settings → People)
+#   - The person's primary device tracker must come from the Mobile App
+#     integration (this is the default when using the HA Companion app)
+#
+# MANUAL OVERRIDE:
+#   If auto-detection doesn't work for your setup, replace the
+#   notify_service template with a hardcoded service name like:
+#     notify_service: notify.mobile_app_your_phone
 
 alias: "Eldes: Arm Failed — Bypass Notification"
 description: >-
-  Sends a notification listing the exact open zones when arming fails.
-  The user can tap Bypass & Arm to re-arm with those zones bypassed,
-  or Cancel to do nothing. Context expires after 120 seconds.
+  Detects who tried to arm, sends bypass notification to their phone.
+  Falls back to notify.notify if user cannot be identified.
 triggers:
   - event_type: eldes_alarm_arm_failed
     trigger: event
@@ -31,7 +44,22 @@ actions:
           - condition: trigger
             id: arm_failed
         sequence:
-          - action: notify.mobile_app_YOUR_PHONE
+          - variables:
+              user_id: "{{ trigger.event.context.user_id | default('') }}"
+              notify_service: >-
+                {% set ns = namespace(svc='notify.notify') %}
+                {% if user_id %}
+                  {% for person in states.person %}
+                    {% if state_attr(person.entity_id, 'user_id') == user_id %}
+                      {% set src = state_attr(person.entity_id, 'source') | default('') %}
+                      {% if src.startswith('device_tracker.') %}
+                        {% set ns.svc = 'notify.mobile_app_' ~ src.replace('device_tracker.', '') %}
+                      {% endif %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+                {{ ns.svc }}
+          - action: "{{ notify_service }}"
             data:
               title: "Arming failed: {{ trigger.event.data.partition_name }}"
               message: >-
