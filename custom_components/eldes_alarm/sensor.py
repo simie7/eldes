@@ -6,7 +6,6 @@ from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DATA_CLIENT,
@@ -17,9 +16,7 @@ from .const import (
     ATTR_EVENTS,
     ATTR_ALARMS,
     ATTR_USER_ACTIONS,
-    EVENT_TYPE_ALARM,
-    EVENT_TYPE_ARM,
-    EVENT_TYPE_DISARM,
+    EVENT_CATEGORIES,
 )
 from . import EldesDeviceEntity
 
@@ -37,6 +34,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entities.append(EldesGSMStrengthSensor(client, coordinator, index))
         entities.append(EldesPhoneNumberSensor(client, coordinator, index))
         entities.append(EventsSensor(client, coordinator, index))
+        entities.append(EldesSystemFaultsSensor(client, coordinator, index))
         for temp_index in range(len(coordinator.data[index]["temp"])):
             entities.append(EldesTemperatureSensor(client, coordinator, index, temp_index))
 
@@ -136,7 +134,7 @@ class EldesTemperatureSensor(EldesDeviceEntity, SensorEntity):
 
 
 class EventsSensor(EldesDeviceEntity, SensorEntity):
-    """Class for the events sensor."""
+    """Class for the events sensor with categorization."""
 
     @property
     def unique_id(self):
@@ -155,46 +153,87 @@ class EventsSensor(EldesDeviceEntity, SensorEntity):
         events = []
         alarms = []
         user_actions = []
+        troubles = []
+
         for event in self.data.get("events", []):
-            if event["type"] == EVENT_TYPE_ALARM:
-                alarms.append(self.__add_time(event))
-            elif event["type"] in (EVENT_TYPE_ARM, EVENT_TYPE_DISARM):
-                user_actions.append(self.__add_time_and_name(event))
+            event_type = event.get("type", "")
+            category = EVENT_CATEGORIES.get(event_type, "other")
+            enriched = self._enrich_event(event)
+
+            if category == "alarm":
+                alarms.append(enriched)
+            elif category == "user_action":
+                user_actions.append(self._add_name(enriched))
+            elif category == "trouble":
+                troubles.append(enriched)
             else:
-                events.append(self.__add_time(event))
+                events.append(enriched)
 
         return {
             ATTR_EVENTS: events,
             ATTR_ALARMS: alarms,
             ATTR_USER_ACTIONS: user_actions,
+            "troubles": troubles,
         }
 
     @property
     def icon(self):
         return "mdi:calendar"
 
-    def __add_time_and_name(self, event):
+    def _add_name(self, event):
         new_event = event.copy()
         message = new_event.get("message", "")
         name = message.split(" ")[0] if message else ""
-        new_event.update({"name": name})
-        return self.__add_time(new_event)
+        new_event["name"] = name
+        return new_event
 
-    def __add_time(self, event):
+    def _enrich_event(self, event):
         new_event = event.copy()
-        device_time = new_event.get("deviceTime", [])
-        year = self.__safe_list_get(device_time, 0, 2000)
-        month = self.__safe_list_get(device_time, 1, 1)
-        day = self.__safe_list_get(device_time, 2, 1)
-        hour = self.__safe_list_get(device_time, 3, 0)
-        minutes = self.__safe_list_get(device_time, 4, 0)
-        seconds = self.__safe_list_get(device_time, 5, 0)
-        new_event["event_time"] = datetime(year, month, day, hour, minutes, seconds)
+        new_event["event_time"] = self._parse_device_time(
+            new_event.get("deviceTime", [])
+        )
+        new_event["category"] = EVENT_CATEGORIES.get(
+            new_event.get("type", ""), "other"
+        )
         return new_event
 
     @staticmethod
-    def __safe_list_get(current_list, idx, default):
+    def _parse_device_time(device_time):
+        if not device_time or not isinstance(device_time, list):
+            return None
         try:
-            return current_list[idx]
-        except IndexError:
-            return default
+            return datetime(
+                device_time[0] if len(device_time) > 0 else 2000,
+                device_time[1] if len(device_time) > 1 else 1,
+                device_time[2] if len(device_time) > 2 else 1,
+                device_time[3] if len(device_time) > 3 else 0,
+                device_time[4] if len(device_time) > 4 else 0,
+                device_time[5] if len(device_time) > 5 else 0,
+            )
+        except (ValueError, TypeError):
+            return None
+
+
+class EldesSystemFaultsSensor(EldesDeviceEntity, SensorEntity):
+    """Sensor showing count and details of active system faults."""
+
+    @property
+    def unique_id(self):
+        return f"{self.imei}_system_faults"
+
+    @property
+    def name(self):
+        return f"{self.data['info']['model']} System Faults"
+
+    @property
+    def native_value(self):
+        return len(self.data.get("system_faults", []))
+
+    @property
+    def extra_state_attributes(self):
+        return {"faults": self.data.get("system_faults", [])}
+
+    @property
+    def icon(self):
+        faults = self.data.get("system_faults", [])
+        return "mdi:alert-circle" if faults else "mdi:check-circle"

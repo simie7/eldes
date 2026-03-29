@@ -60,4 +60,52 @@ ATTR_USER_ACTIONS = "user_actions"
 EVENT_TYPE_ALARM = "ALARM"
 EVENT_TYPE_ARM = "ARM"
 EVENT_TYPE_DISARM = "DISARM"
+EVENT_TYPE_ZONE_TAMPER = "ZONE_TAMPER"
+EVENT_TYPE_ZONE_RESTORE = "ZONE_RESTORE"
+EVENT_TYPE_TROUBLE = "TROUBLE"
+EVENT_TYPE_TROUBLE_RESTORE = "TROUBLE_RESTORE"
+EVENT_TYPE_POWER_FAILURE = "POWER_FAILURE"
+EVENT_TYPE_POWER_RESTORE = "POWER_RESTORE"
+EVENT_TYPE_ZONE_BYPASS = "ZONE_BYPASS"
+EVENT_TYPE_ZONE_BYPASS_RESTORE = "ZONE_BYPASS_RESTORE"
 
+EVENT_CATEGORIES = {
+    EVENT_TYPE_ALARM: "alarm",
+    EVENT_TYPE_ARM: "user_action",
+    EVENT_TYPE_DISARM: "user_action",
+    EVENT_TYPE_ZONE_TAMPER: "alarm",
+    EVENT_TYPE_ZONE_RESTORE: "status",
+    EVENT_TYPE_TROUBLE: "trouble",
+    EVENT_TYPE_TROUBLE_RESTORE: "status",
+    EVENT_TYPE_POWER_FAILURE: "trouble",
+    EVENT_TYPE_POWER_RESTORE: "status",
+    EVENT_TYPE_ZONE_BYPASS: "user_action",
+    EVENT_TYPE_ZONE_BYPASS_RESTORE: "user_action",
+}
+
+SERVICE_ARM_WITH_BYPASS = "arm_with_bypass"
+SERVICE_ARM_HOME_WITH_BYPASS = "arm_home_with_bypass"
+
+ZONE_NAME_DEVICE_CLASS_MAP = {
+    "door": "door",
+    "durys": "door",
+    "dur": "door",
+    "gate": "door",
+    "vartai": "door",
+    "window": "window",
+    "langas": "window",
+    "lang": "window",
+    "pir": "motion",
+    "motion": "motion",
+    "judesio": "motion",
+    "judesys": "motion",
+    "smoke": "smoke",
+    "dumai": "smoke",
+    "dum": "smoke",
+    "gas": "gas",
+    "dujos": "gas",
+    "water": "moisture",
+    "flood": "moisture",
+    "vanduo": "moisture",
+    "tamper": "tamper",
+}

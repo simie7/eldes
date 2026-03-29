@@ -1,0 +1,45 @@
+arm_with_bypass:
+  name: Arm Away with Zone Bypass
+  description: Arm the alarm in away mode, bypassing specified zones.
+  target:
+    entity:
+      domain: alarm_control_panel
+      integration: eldes_alarm
+  fields:
+    bypass_zones:
+      name: Bypass Zones
+      description: List of zone IDs to bypass when arming.
+      required: false
+      example: "[7, 12]"
+      selector:
+        object:
+    bypass_all:
+      name: Bypass All Violated
+      description: Bypass all currently violated zones.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+arm_home_with_bypass:
+  name: Arm Home with Zone Bypass
+  description: Arm the alarm in home/stay mode, bypassing specified zones.
+  target:
+    entity:
+      domain: alarm_control_panel
+      integration: eldes_alarm
+  fields:
+    bypass_zones:
+      name: Bypass Zones
+      description: List of zone IDs to bypass when arming.
+      required: false
+      example: "[7, 12]"
+      selector:
+        object:
+    bypass_all:
+      name: Bypass All Violated
+      description: Bypass all currently violated zones.
+      required: false
+      default: false
+      selector:
+        boolean:
