@@ -121,13 +121,9 @@ class EldesCloud:
             _LOGGER.debug("Token successfully refreshed: %s", result)
             return await self._setOAuthHeader(result)
 
-        except aiohttp.ClientResponseError as err:
-            _LOGGER.error("Token refresh failed: %s", err)
-            raise
-
-        except Exception as e:
-            _LOGGER.error("Unexpected error during token refresh: %s", e)
-            raise
+        except Exception:
+            _LOGGER.debug("Token refresh failed, falling back to full re-login")
+            await self.login()
 
     async def get_devices(self):
         url = f"{API_URL}{API_PATHS['DEVICE']}list"

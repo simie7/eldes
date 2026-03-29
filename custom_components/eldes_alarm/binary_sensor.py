@@ -26,6 +26,7 @@ DEVICE_CLASS_LOOKUP = {
     "gas": BinarySensorDeviceClass.GAS,
     "moisture": BinarySensorDeviceClass.MOISTURE,
     "tamper": BinarySensorDeviceClass.TAMPER,
+    "vibration": BinarySensorDeviceClass.VIBRATION,
 }
 
 

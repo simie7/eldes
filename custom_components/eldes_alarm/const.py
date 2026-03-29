@@ -86,6 +86,10 @@ EVENT_CATEGORIES = {
 SERVICE_ARM_WITH_BYPASS = "arm_with_bypass"
 SERVICE_ARM_HOME_WITH_BYPASS = "arm_home_with_bypass"
 
+EVENT_ARM_FAILED = "eldes_alarm_arm_failed"
+
+ARM_CHECK_DELAY_SECONDS = 8
+
 ZONE_NAME_DEVICE_CLASS_MAP = {
     "door": "door",
     "durys": "door",
@@ -108,4 +112,7 @@ ZONE_NAME_DEVICE_CLASS_MAP = {
     "flood": "moisture",
     "vanduo": "moisture",
     "tamper": "tamper",
+    "sd": "vibration",
+    "stikl": "vibration",
+    "glass": "vibration",
 }

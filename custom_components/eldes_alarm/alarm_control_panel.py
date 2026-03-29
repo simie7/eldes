@@ -8,12 +8,15 @@ from homeassistant.components.alarm_control_panel import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_call_later
 
 from .const import (
     DATA_CLIENT,
     DATA_COORDINATOR,
     DOMAIN,
     ALARM_MODES,
+    EVENT_ARM_FAILED,
+    ARM_CHECK_DELAY_SECONDS,
 )
 from . import EldesDeviceEntity
 
@@ -47,6 +50,8 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
     def __init__(self, client, coordinator, device_index, partition_index):
         super().__init__(client, coordinator, device_index, partition_index)
         self._previous_state = None
+        self._pending_arm_mode = None
+        self._arm_check_unsub = None
 
     @property
     def partition(self):
@@ -95,6 +100,57 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
             self.partition["state"] = self._previous_state
             self.async_write_ha_state()
             raise
+
+        if mode in (ALARM_MODES["ARM_AWAY"], ALARM_MODES["ARM_HOME"]):
+            self._pending_arm_mode = mode
+            if self._arm_check_unsub:
+                self._arm_check_unsub()
+            self._arm_check_unsub = async_call_later(
+                self.hass, ARM_CHECK_DELAY_SECONDS, self._check_arm_result
+            )
+
+    async def _check_arm_result(self, _now=None):
+        """Re-fetch partition status; fire event if arming failed."""
+        self._arm_check_unsub = None
+        mode = self._pending_arm_mode
+        self._pending_arm_mode = None
+
+        try:
+            partitions = await self.client.get_device_partitions(self.imei)
+        except Exception as ex:
+            _LOGGER.warning("Failed to check arm result: %s", ex)
+            return
+
+        for partition in partitions:
+            if partition.get("internalId") == self.partition["internalId"]:
+                current_state = partition.get("state", AlarmControlPanelState.DISARMED)
+                if current_state == AlarmControlPanelState.DISARMED:
+                    _LOGGER.info(
+                        "Arming failed for partition %s - still disarmed after %ds",
+                        self.partition["name"],
+                        ARM_CHECK_DELAY_SECONDS,
+                    )
+                    self.partition["state"] = AlarmControlPanelState.DISARMED
+                    self.async_write_ha_state()
+
+                    zones = self.data.get("zones", [])
+                    zone_info = [
+                        {"zone_id": z.get("zoneId"), "zone_name": z.get("zoneName", "")}
+                        for z in zones
+                        if not z.get("disabled", False)
+                    ]
+
+                    self.hass.bus.async_fire(EVENT_ARM_FAILED, {
+                        "entity_id": self.entity_id,
+                        "partition_name": self.partition["name"],
+                        "partition_id": self.partition["internalId"],
+                        "mode": mode,
+                        "zones": zone_info,
+                    })
+                else:
+                    self.partition["state"] = current_state
+                    self.async_write_ha_state()
+                break
 
     async def async_alarm_disarm(self, code=None) -> None:
         await self._async_set_alarm(

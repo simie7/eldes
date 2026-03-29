@@ -39,6 +39,8 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "binary_sensor", "switch", "alarm_control_panel", "event"]
 
+DATA_SHARED_CLIENTS = "_clients"
+
 CONFIG_SCHEMA = cv.deprecated(DOMAIN)
 
 SERVICE_BYPASS_SCHEMA = vol.Schema(
@@ -47,6 +49,12 @@ SERVICE_BYPASS_SCHEMA = vol.Schema(
         vol.Optional("bypass_all", default=False): bool,
     }
 )
+
+DEFAULT_DEVICE_INFO = {
+    "model": "Unknown",
+    "firmware": "Unknown",
+    "online": False,
+}
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -57,18 +65,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     selected_imei = entry.data[CONF_DEVICE_IMEI]
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
 
-    session = async_get_clientsession(hass)
-    eldes_client = EldesCloud(session, username, password, pin)
+    hass.data.setdefault(DOMAIN, {DATA_SHARED_CLIENTS: {}})
 
-    try:
-        await eldes_client.login()
-    except (asyncio.TimeoutError, ClientResponseError) as ex:
-        if isinstance(ex, ClientResponseError) and ex.status == HTTPStatus.UNAUTHORIZED:
-            raise ConfigEntryAuthFailed from ex
-        raise ConfigEntryNotReady from ex
-    except Exception as ex:
-        _LOGGER.error("Failed to login to Eldes: %s", ex)
-        return False
+    client_key = (username, password, pin)
+
+    if client_key in hass.data[DOMAIN][DATA_SHARED_CLIENTS]:
+        eldes_client = hass.data[DOMAIN][DATA_SHARED_CLIENTS][client_key]
+        _LOGGER.debug("Reusing shared Eldes client for %s", selected_imei)
+    else:
+        session = async_get_clientsession(hass)
+        eldes_client = EldesCloud(session, username, password, pin)
+
+        try:
+            await eldes_client.login()
+        except (asyncio.TimeoutError, ClientResponseError) as ex:
+            if isinstance(ex, ClientResponseError) and ex.status == HTTPStatus.UNAUTHORIZED:
+                raise ConfigEntryAuthFailed from ex
+            raise ConfigEntryNotReady from ex
+        except Exception as ex:
+            _LOGGER.error("Failed to login to Eldes: %s", ex)
+            return False
+
+        hass.data[DOMAIN][DATA_SHARED_CLIENTS][client_key] = eldes_client
 
     async def async_update_data():
         """Fetch data for selected Eldes device."""
@@ -89,7 +107,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         DATA_CLIENT: eldes_client,
         DATA_COORDINATOR: coordinator,
@@ -103,6 +120,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bypass_all = call.data.get("bypass_all", False)
 
         for eid, data in hass.data[DOMAIN].items():
+            if eid == DATA_SHARED_CLIENTS:
+                continue
             client = data[DATA_CLIENT]
             coord = data[DATA_COORDINATOR]
             for device in coord.data:
@@ -121,6 +140,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bypass_all = call.data.get("bypass_all", False)
 
         for eid, data in hass.data[DOMAIN].items():
+            if eid == DATA_SHARED_CLIENTS:
+                continue
             client = data[DATA_CLIENT]
             coord = data[DATA_COORDINATOR]
             for device in coord.data:
@@ -151,20 +172,25 @@ def _all_zone_ids(device: dict) -> list:
 
 
 async def async_fetch_device_data(eldes_client: EldesCloud, imei: str, entry: ConfigEntry) -> dict:
-    """Fetch full data for a single Eldes device."""
+    """Fetch full data for a single Eldes device. Each call is resilient to failures."""
     events_list_size = entry.options.get(CONF_EVENTS_LIST_SIZE, DEFAULT_EVENTS_LIST_SIZE)
 
-    device = {
-        "imei": imei,
-        "info": await eldes_client.get_device_info(imei),
-        "partitions": await eldes_client.get_device_partitions(imei),
-        "outputs": await eldes_client.get_device_outputs(imei),
-        "temp": await eldes_client.get_temperatures(imei),
-        "events": await eldes_client.get_events(imei, events_list_size),
-        "zones": await eldes_client.get_zones(imei),
-        "system_faults": await eldes_client.get_system_faults(imei),
-        "active_zones": [],
-    }
+    device = {"imei": imei, "active_zones": []}
+
+    for key, coro in [
+        ("info", eldes_client.get_device_info(imei)),
+        ("partitions", eldes_client.get_device_partitions(imei)),
+        ("outputs", eldes_client.get_device_outputs(imei)),
+        ("temp", eldes_client.get_temperatures(imei)),
+        ("events", eldes_client.get_events(imei, events_list_size)),
+        ("zones", eldes_client.get_zones(imei)),
+        ("system_faults", eldes_client.get_system_faults(imei)),
+    ]:
+        try:
+            device[key] = await coro
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch %s for %s: %s", key, imei, ex)
+            device[key] = dict(DEFAULT_DEVICE_INFO) if key == "info" else []
 
     return device
 
@@ -174,6 +200,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+
+        username = entry.data[CONF_USERNAME]
+        password = entry.data[CONF_PASSWORD]
+        pin = entry.data[CONF_PIN]
+        client_key = (username, password, pin)
+
+        still_in_use = any(
+            eid != DATA_SHARED_CLIENTS
+            and eid != entry.entry_id
+            and isinstance(data, dict)
+            and data.get(DATA_CLIENT) is hass.data[DOMAIN].get(DATA_SHARED_CLIENTS, {}).get(client_key)
+            for eid, data in hass.data[DOMAIN].items()
+        )
+        if not still_in_use:
+            hass.data[DOMAIN].get(DATA_SHARED_CLIENTS, {}).pop(client_key, None)
+
     return unload_ok
 
 
@@ -196,10 +238,11 @@ class EldesDeviceEntity(CoordinatorEntity):
     @property
     def device_info(self):
         """Return device info for the Eldes entity."""
+        info = self.data.get("info", {})
         return {
             "identifiers": {(DOMAIN, self.imei)},
-            "name": self.data["info"]["model"],
+            "name": info.get("model", "Eldes"),
             "manufacturer": DEFAULT_NAME,
-            "sw_version": self.data["info"]["firmware"],
-            "model": self.data["info"]["model"],
+            "sw_version": info.get("firmware", "Unknown"),
+            "model": info.get("model", "Unknown"),
         }
