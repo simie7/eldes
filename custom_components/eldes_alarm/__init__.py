@@ -4,11 +4,12 @@ import logging
 import asyncio
 from http import HTTPStatus
 
+import voluptuous as vol
 from aiohttp import ClientResponseError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_PIN, CONF_SCAN_INTERVAL
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -27,15 +28,25 @@ from .const import (
     CONF_EVENTS_LIST_SIZE,
     DEFAULT_EVENTS_LIST_SIZE,
     DOMAIN,
+    ALARM_MODES,
+    SERVICE_ARM_WITH_BYPASS,
+    SERVICE_ARM_HOME_WITH_BYPASS,
 )
 
 from .core.eldes_cloud import EldesCloud
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "binary_sensor", "switch", "alarm_control_panel"]
+PLATFORMS = ["sensor", "binary_sensor", "switch", "alarm_control_panel", "event"]
 
 CONFIG_SCHEMA = cv.deprecated(DOMAIN)
+
+SERVICE_BYPASS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("bypass_zones"): list,
+        vol.Optional("bypass_all", default=False): bool,
+    }
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -85,7 +96,58 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    async def handle_arm_with_bypass(call: ServiceCall) -> None:
+        """Handle arm with bypass service call."""
+        bypass_zones = call.data.get("bypass_zones", [])
+        bypass_all = call.data.get("bypass_all", False)
+
+        for eid, data in hass.data[DOMAIN].items():
+            client = data[DATA_CLIENT]
+            coord = data[DATA_COORDINATOR]
+            for device in coord.data:
+                for partition in device.get("partitions", []):
+                    zones = bypass_zones if not bypass_all else _all_zone_ids(device)
+                    await client.set_alarm(
+                        ALARM_MODES["ARM_AWAY"],
+                        device["imei"],
+                        partition["internalId"],
+                        zones_to_bypass=zones or None,
+                    )
+
+    async def handle_arm_home_with_bypass(call: ServiceCall) -> None:
+        """Handle arm home with bypass service call."""
+        bypass_zones = call.data.get("bypass_zones", [])
+        bypass_all = call.data.get("bypass_all", False)
+
+        for eid, data in hass.data[DOMAIN].items():
+            client = data[DATA_CLIENT]
+            coord = data[DATA_COORDINATOR]
+            for device in coord.data:
+                for partition in device.get("partitions", []):
+                    zones = bypass_zones if not bypass_all else _all_zone_ids(device)
+                    await client.set_alarm(
+                        ALARM_MODES["ARM_HOME"],
+                        device["imei"],
+                        partition["internalId"],
+                        zones_to_bypass=zones or None,
+                    )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_ARM_WITH_BYPASS, handle_arm_with_bypass,
+        schema=SERVICE_BYPASS_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ARM_HOME_WITH_BYPASS, handle_arm_home_with_bypass,
+        schema=SERVICE_BYPASS_SCHEMA,
+    )
+
     return True
+
+
+def _all_zone_ids(device: dict) -> list:
+    """Extract all zone IDs from device data for bypass_all."""
+    return [z.get("zoneId") for z in device.get("zones", []) if not z.get("disabled", False)]
 
 
 async def async_fetch_device_data(eldes_client: EldesCloud, imei: str, entry: ConfigEntry) -> dict:
@@ -99,6 +161,9 @@ async def async_fetch_device_data(eldes_client: EldesCloud, imei: str, entry: Co
         "outputs": await eldes_client.get_device_outputs(imei),
         "temp": await eldes_client.get_temperatures(imei),
         "events": await eldes_client.get_events(imei, events_list_size),
+        "zones": await eldes_client.get_zones(imei),
+        "system_faults": await eldes_client.get_system_faults(imei),
+        "active_zones": [],
     }
 
     return device

@@ -8,7 +8,6 @@ from homeassistant.components.alarm_control_panel import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DATA_CLIENT,
@@ -74,19 +73,28 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
     def alarm_state(self) -> AlarmControlPanelState:
         return self.partition["state"]
 
-    async def _async_set_alarm(self, mode: str, transition_state: AlarmControlPanelState) -> None:
+    async def _async_set_alarm(
+        self,
+        mode: str,
+        transition_state: AlarmControlPanelState,
+        zones_to_bypass: list | None = None,
+    ) -> None:
         self._previous_state = self.partition["state"]
         self.partition["state"] = transition_state
         self.async_write_ha_state()
 
         try:
-            await self.client.set_alarm(mode, self.imei, self.partition["internalId"])
+            await self.client.set_alarm(
+                mode,
+                self.imei,
+                self.partition["internalId"],
+                zones_to_bypass=zones_to_bypass,
+            )
         except Exception as ex:
             _LOGGER.error("Failed to set alarm (%s): %s", mode, ex)
             self.partition["state"] = self._previous_state
             self.async_write_ha_state()
             raise
-
 
     async def async_alarm_disarm(self, code=None) -> None:
         await self._async_set_alarm(
@@ -104,4 +112,12 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
         await self._async_set_alarm(
             ALARM_MODES["ARM_HOME"],
             AlarmControlPanelState.ARMING
+        )
+
+    async def async_arm_with_bypass(self, mode: str, zones_to_bypass: list | None = None) -> None:
+        """Arm with optional zone bypass, called from service handler."""
+        await self._async_set_alarm(
+            mode,
+            AlarmControlPanelState.ARMING,
+            zones_to_bypass=zones_to_bypass,
         )

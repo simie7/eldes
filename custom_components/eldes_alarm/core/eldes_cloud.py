@@ -43,7 +43,7 @@ class EldesCloud:
 
         if "token" in data:
             self.headers["Authorization"] = f"Bearer {data['token']}"
-            self._token_expires_at = datetime.utcnow() + timedelta(minutes=4)  # token lasts 5 minutes, refresh 1 minute before
+            self._token_expires_at = datetime.utcnow() + timedelta(minutes=4)
 
         return data
 
@@ -160,34 +160,75 @@ class EldesCloud:
         result = await response.json()
         return result.get("deviceOutputs", [])
 
-    async def set_alarm(self, mode, imei, zone_id):
+    async def get_zones(self, imei):
+        """Fetch all zones for a device. Returns list of zone objects."""
+        url = f"{API_URL}{API_PATHS['DEVICE']}list-zones/{imei}"
+        try:
+            response = await self._safe_api_call(url, "GET")
+            result = await response.json()
+            _LOGGER.debug("Zones response for %s: %s", imei, result)
+            if isinstance(result, list):
+                return result
+            return result.get("zones", result.get("zoneList", []))
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch zones (non-fatal): %s", ex)
+            return []
+
+    async def get_system_faults(self, imei):
+        """Fetch active system faults for a device."""
+        data = {"pin": self._pin}
+        url = f"{API_URL}{API_PATHS['DEVICE']}system-fault/list/{imei}"
+        try:
+            response = await self._safe_api_call(url, "POST", data)
+            result = await response.json()
+            _LOGGER.debug("System faults for %s: %s", imei, result)
+            if isinstance(result, list):
+                return result
+            return result.get("faults", result.get("systemFaults", []))
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch system faults (non-fatal): %s", ex)
+            return []
+
+    async def set_alarm(self, mode, imei, zone_id, zones_to_bypass=None):
+        """Arm/disarm with optional zone bypass."""
         data = {"imei": imei, "partitionIndex": zone_id, "pin": self._pin}
+        if zones_to_bypass:
+            data["zonesToBypass"] = zones_to_bypass
         url = f"{API_URL}{API_PATHS['DEVICE']}action/{mode}"
         response = await self._safe_api_call(url, "POST", data)
         return await response.text()
 
     async def turn_on_output(self, imei, output_id):
-        data = {"": "", "pin": self._pin}
+        data = {"pin": self._pin}
         url = f"{API_URL}{API_PATHS['DEVICE']}control/enable/{imei}/{output_id}"
         response = await self._safe_api_call(url, "PUT", data)
         return response
 
     async def turn_off_output(self, imei, output_id):
-        data = {"": "", "pin": self._pin}
+        data = {"pin": self._pin}
         url = f"{API_URL}{API_PATHS['DEVICE']}control/disable/{imei}/{output_id}"
         response = await self._safe_api_call(url, "PUT", data)
         return response
 
     async def get_temperatures(self, imei):
-        data = {"": "", "pin": self._pin}
+        data = {"pin": self._pin}
         url = f"{API_URL}{API_PATHS['DEVICE']}temperatures?imei={imei}"
         response = await self._safe_api_call(url, "POST", data)
         result = await response.json()
         return result.get("temperatureDetailsList", [])
 
     async def get_events(self, imei, size):
-        data = {"": "", "imei": imei, "size": size, "start": 0, "pin": self._pin}
+        data = {"imei": imei, "size": size, "start": 0, "pin": self._pin}
         url = f"{API_URL}{API_PATHS['DEVICE']}event/list"
-        response = await self._safe_api_call(url, "POST", data)
-        result = await response.json()
-        return result.get("eventDetails", [])
+        try:
+            response = await self._safe_api_call(url, "POST", data)
+            result = await response.json()
+            _LOGGER.debug("Events raw response: %s", result)
+            events = result.get("eventDetails", [])
+            if events is None:
+                _LOGGER.warning("Events endpoint returned null eventDetails")
+                return []
+            return events
+        except Exception as ex:
+            _LOGGER.warning("Failed to fetch events (non-fatal): %s", ex)
+            return []
