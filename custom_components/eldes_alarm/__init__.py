@@ -1,5 +1,5 @@
 """Support for the Eldes API."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 import asyncio
 from http import HTTPStatus
@@ -31,6 +31,8 @@ from .const import (
     ALARM_MODES,
     SERVICE_ARM_WITH_BYPASS,
     SERVICE_ARM_HOME_WITH_BYPASS,
+    SERVICE_RETRY_ARM_WITH_BYPASS,
+    ARM_FAILURE_CONTEXT_TTL_SECONDS,
 )
 
 from .core.eldes_cloud import EldesCloud
@@ -40,6 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor", "binary_sensor", "switch", "alarm_control_panel", "event"]
 
 DATA_SHARED_CLIENTS = "_clients"
+DATA_LAST_ARM_FAILURE = "_last_arm_failure"
 
 CONFIG_SCHEMA = cv.deprecated(DOMAIN)
 
@@ -154,6 +157,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         zones_to_bypass=zones or None,
                     )
 
+    async def handle_retry_arm_with_bypass(call: ServiceCall) -> None:
+        """Re-arm using the stored arm failure context (partition + violated zones)."""
+        failure = hass.data[DOMAIN].get(DATA_LAST_ARM_FAILURE)
+        if not failure:
+            _LOGGER.warning("retry_arm_with_bypass: no recent arm failure context found")
+            return
+
+        age = (datetime.now() - failure["timestamp"]).total_seconds()
+        if age > ARM_FAILURE_CONTEXT_TTL_SECONDS:
+            _LOGGER.warning(
+                "retry_arm_with_bypass: arm failure context expired (%.0fs old, max %ds)",
+                age, ARM_FAILURE_CONTEXT_TTL_SECONDS,
+            )
+            hass.data[DOMAIN].pop(DATA_LAST_ARM_FAILURE, None)
+            return
+
+        imei = failure["imei"]
+        partition_id = failure["partition_id"]
+        mode = failure["mode"]
+        bypass_zones = failure["bypass_zones"]
+
+        _LOGGER.info(
+            "retry_arm_with_bypass: re-arming %s partition %s with bypass zones %s",
+            mode, partition_id, bypass_zones,
+        )
+
+        client = None
+        for eid, data in hass.data[DOMAIN].items():
+            if eid in (DATA_SHARED_CLIENTS, DATA_LAST_ARM_FAILURE):
+                continue
+            if not isinstance(data, dict):
+                continue
+            coord = data.get(DATA_COORDINATOR)
+            if coord and coord.data:
+                for device in coord.data:
+                    if device.get("imei") == imei:
+                        client = data[DATA_CLIENT]
+                        break
+            if client:
+                break
+
+        if not client:
+            _LOGGER.error("retry_arm_with_bypass: could not find client for IMEI %s", imei)
+            return
+
+        await client.set_alarm(mode, imei, partition_id, zones_to_bypass=bypass_zones)
+        hass.data[DOMAIN].pop(DATA_LAST_ARM_FAILURE, None)
+
+        _LOGGER.info("retry_arm_with_bypass: arm command sent successfully")
+
     hass.services.async_register(
         DOMAIN, SERVICE_ARM_WITH_BYPASS, handle_arm_with_bypass,
         schema=SERVICE_BYPASS_SCHEMA,
@@ -161,6 +214,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_register(
         DOMAIN, SERVICE_ARM_HOME_WITH_BYPASS, handle_arm_home_with_bypass,
         schema=SERVICE_BYPASS_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_RETRY_ARM_WITH_BYPASS, handle_retry_arm_with_bypass,
     )
 
     return True

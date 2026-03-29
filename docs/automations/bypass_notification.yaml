@@ -1,61 +1,53 @@
-# Eldes Alarm - Bypass Notification Automation
+# Eldes Alarm — Arm Failed: Bypass Notification
 #
-# When arming fails (e.g., a door is open), this automation sends an
-# actionable notification to your phone. You can tap "Bypass & Arm"
-# to arm with all zones bypassed, or "Cancel" to do nothing.
+# Single automation with two triggers using trigger_id:
+#   1. arm_failed  — fires when arming fails due to open zones,
+#                    sends actionable notification with exact zone names
+#   2. bypass_confirmed — fires when user taps "Bypass & Arm",
+#                         calls retry_arm_with_bypass (uses stored context)
 #
 # SETUP:
-# 1. Replace "notify.mobile_app_YOUR_PHONE" with your actual notify service
-#    (check Settings > Devices > your phone > Notifications)
-# 2. Copy this into your automations.yaml or paste via the HA automation editor
-# 3. Restart or reload automations
+#   Replace "notify.mobile_app_YOUR_PHONE" with your actual notify service
+#   (Settings → Devices → your phone → Notifications)
 
-- alias: "Eldes: Arming failed - bypass notification"
-  id: eldes_arm_failed_bypass_notification
-  trigger:
-    - platform: event
-      event_type: eldes_alarm_arm_failed
-  action:
-    - variables:
-        partition_name: "{{ trigger.event.data.partition_name }}"
-        arm_mode: "{{ trigger.event.data.mode }}"
-        zone_names: >-
-          {% set zones = trigger.event.data.zones %}
-          {% if zones | length > 0 %}
-            {{ zones | map(attribute='zone_name') | join(', ') }}
-          {% else %}
-            (unknown zones)
-          {% endif %}
-    - service: notify.mobile_app_YOUR_PHONE
-      data:
-        title: "Arming failed: {{ partition_name }}"
-        message: "Could not arm. Configured zones: {{ zone_names }}"
-        data:
-          actions:
-            - action: ELDES_BYPASS_ARM
-              title: "Bypass & Arm"
-            - action: ELDES_BYPASS_CANCEL
-              title: "Cancel"
-          timeout: 60
-          tag: eldes_arm_failed
-
-- alias: "Eldes: Bypass & Arm confirmed"
-  id: eldes_bypass_arm_confirmed
-  trigger:
-    - platform: event
-      event_type: mobile_app_notification_action
-      event_data:
-        action: ELDES_BYPASS_ARM
-  action:
-    - variables:
-        arm_mode: >-
-          {% set last = states.automation.eldes_arming_failed_bypass_notification.attributes.last_triggered %}
-          armstay
-    - service: >-
-        {% if arm_mode == 'arm' %}
-          eldes_alarm.arm_with_bypass
-        {% else %}
-          eldes_alarm.arm_home_with_bypass
-        {% endif %}
-      data:
-        bypass_all: true
+alias: "Eldes: Arm Failed — Bypass Notification"
+description: >-
+  Sends a notification listing the exact open zones when arming fails.
+  The user can tap Bypass & Arm to re-arm with those zones bypassed,
+  or Cancel to do nothing. Context expires after 120 seconds.
+triggers:
+  - event_type: eldes_alarm_arm_failed
+    trigger: event
+    id: arm_failed
+  - event_type: mobile_app_notification_action
+    event_data:
+      action: ELDES_BYPASS_ARM
+    trigger: event
+    id: bypass_confirmed
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: arm_failed
+        sequence:
+          - action: notify.mobile_app_YOUR_PHONE
+            data:
+              title: "Arming failed: {{ trigger.event.data.partition_name }}"
+              message: >-
+                Open zones: {{ trigger.event.data.active_zones | join(', ') }}
+              data:
+                actions:
+                  - action: ELDES_BYPASS_ARM
+                    title: Bypass & Arm
+                  - action: ELDES_BYPASS_CANCEL
+                    title: Cancel
+                timeout: 60
+                tag: eldes_arm_failed
+      - conditions:
+          - condition: trigger
+            id: bypass_confirmed
+        sequence:
+          - action: eldes_alarm.retry_arm_with_bypass
+            data: {}
+mode: single

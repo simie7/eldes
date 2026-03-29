@@ -1,5 +1,6 @@
 """Support for Eldes control panels."""
 import logging
+from datetime import datetime
 
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
@@ -8,7 +9,6 @@ from homeassistant.components.alarm_control_panel import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_call_later
 
 from .const import (
     DATA_CLIENT,
@@ -16,11 +16,12 @@ from .const import (
     DOMAIN,
     ALARM_MODES,
     EVENT_ARM_FAILED,
-    ARM_CHECK_DELAY_SECONDS,
 )
 from . import EldesDeviceEntity
 
 _LOGGER = logging.getLogger(__name__)
+
+DATA_LAST_ARM_FAILURE = "_last_arm_failure"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -50,8 +51,6 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
     def __init__(self, client, coordinator, device_index, partition_index):
         super().__init__(client, coordinator, device_index, partition_index)
         self._previous_state = None
-        self._pending_arm_mode = None
-        self._arm_check_unsub = None
 
     @property
     def partition(self):
@@ -88,69 +87,62 @@ class EldesAlarmPanel(EldesDeviceEntity, AlarmControlPanelEntity):
         self.partition["state"] = transition_state
         self.async_write_ha_state()
 
+        is_arming = mode in (ALARM_MODES["ARM_AWAY"], ALARM_MODES["ARM_HOME"])
+
         try:
-            await self.client.set_alarm(
-                mode,
-                self.imei,
-                self.partition["internalId"],
-                zones_to_bypass=zones_to_bypass,
-            )
+            if is_arming:
+                feedback = await self.client.set_alarm_with_feedback(
+                    mode,
+                    self.imei,
+                    self.partition["internalId"],
+                    zones_to_bypass=zones_to_bypass,
+                )
+            else:
+                await self.client.set_alarm(
+                    mode,
+                    self.imei,
+                    self.partition["internalId"],
+                    zones_to_bypass=zones_to_bypass,
+                )
+                feedback = None
         except Exception as ex:
             _LOGGER.error("Failed to set alarm (%s): %s", mode, ex)
             self.partition["state"] = self._previous_state
             self.async_write_ha_state()
             raise
 
-        if mode in (ALARM_MODES["ARM_AWAY"], ALARM_MODES["ARM_HOME"]):
-            self._pending_arm_mode = mode
-            if self._arm_check_unsub:
-                self._arm_check_unsub()
-            self._arm_check_unsub = async_call_later(
-                self.hass, ARM_CHECK_DELAY_SECONDS, self._check_arm_result
+        if is_arming and feedback and feedback.get("active_zones"):
+            active_zones = feedback["active_zones"]
+            zone_names = [z.get("name", "Unknown") for z in active_zones]
+            bypass_ids = [z.get("internalId") for z in active_zones if z.get("internalId")]
+
+            _LOGGER.info(
+                "Arming failed for %s — active zones: %s",
+                self.partition["name"],
+                ", ".join(zone_names),
             )
 
-    async def _check_arm_result(self, _now=None):
-        """Re-fetch partition status; fire event if arming failed."""
-        self._arm_check_unsub = None
-        mode = self._pending_arm_mode
-        self._pending_arm_mode = None
+            self.partition["state"] = AlarmControlPanelState.DISARMED
+            self.async_write_ha_state()
 
-        try:
-            partitions = await self.client.get_device_partitions(self.imei)
-        except Exception as ex:
-            _LOGGER.warning("Failed to check arm result: %s", ex)
-            return
+            self.hass.data[DOMAIN].setdefault(DATA_LAST_ARM_FAILURE, {})
+            self.hass.data[DOMAIN][DATA_LAST_ARM_FAILURE] = {
+                "imei": self.imei,
+                "partition_id": self.partition["internalId"],
+                "mode": mode,
+                "bypass_zones": bypass_ids,
+                "zone_names": zone_names,
+                "entity_id": self.entity_id,
+                "timestamp": datetime.now(),
+            }
 
-        for partition in partitions:
-            if partition.get("internalId") == self.partition["internalId"]:
-                current_state = partition.get("state", AlarmControlPanelState.DISARMED)
-                if current_state == AlarmControlPanelState.DISARMED:
-                    _LOGGER.info(
-                        "Arming failed for partition %s - still disarmed after %ds",
-                        self.partition["name"],
-                        ARM_CHECK_DELAY_SECONDS,
-                    )
-                    self.partition["state"] = AlarmControlPanelState.DISARMED
-                    self.async_write_ha_state()
-
-                    zones = self.data.get("zones", [])
-                    zone_info = [
-                        {"zone_id": z.get("zoneId"), "zone_name": z.get("zoneName", "")}
-                        for z in zones
-                        if not z.get("disabled", False)
-                    ]
-
-                    self.hass.bus.async_fire(EVENT_ARM_FAILED, {
-                        "entity_id": self.entity_id,
-                        "partition_name": self.partition["name"],
-                        "partition_id": self.partition["internalId"],
-                        "mode": mode,
-                        "zones": zone_info,
-                    })
-                else:
-                    self.partition["state"] = current_state
-                    self.async_write_ha_state()
-                break
+            self.hass.bus.async_fire(EVENT_ARM_FAILED, {
+                "entity_id": self.entity_id,
+                "partition_name": self.partition["name"],
+                "partition_id": self.partition["internalId"],
+                "mode": mode,
+                "active_zones": zone_names,
+            })
 
     async def async_alarm_disarm(self, code=None) -> None:
         await self._async_set_alarm(

@@ -85,10 +85,11 @@ EVENT_CATEGORIES = {
 
 SERVICE_ARM_WITH_BYPASS = "arm_with_bypass"
 SERVICE_ARM_HOME_WITH_BYPASS = "arm_home_with_bypass"
+SERVICE_RETRY_ARM_WITH_BYPASS = "retry_arm_with_bypass"
 
 EVENT_ARM_FAILED = "eldes_alarm_arm_failed"
 
-ARM_CHECK_DELAY_SECONDS = 8
+ARM_FAILURE_CONTEXT_TTL_SECONDS = 120
 
 ZONE_NAME_DEVICE_CLASS_MAP = {
     "door": "door",

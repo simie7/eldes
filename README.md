@@ -2,7 +2,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
-Custom Home Assistant integration for Eldes security systems. Adds **zone bypass**, **zone discovery**, **event entities**, and **system fault monitoring** on top of the original arm/disarm, outputs, and temperature functionality.
+Custom Home Assistant integration for Eldes security systems. Adds **zone bypass**, **zone discovery**, **event entities**, **system fault monitoring**, and **WebSocket-based arm failure detection** on top of the original arm/disarm, outputs, and temperature functionality.
 
 > **Fork notice** -- This project is a fork of [augustas2/eldes](https://github.com/augustas2/eldes). The original author is no longer maintaining the integration. Full credit to [@augustas2](https://github.com/augustas2) for the original work.
 
@@ -13,7 +13,8 @@ Custom Home Assistant integration for Eldes security systems. Adds **zone bypass
 | Arm / Disarm / Arm Stay | Control alarm partitions from Home Assistant |
 | **Zone Bypass** | Arm with open doors/windows by bypassing specific zones |
 | **Zone Discovery** | Binary sensors for each configured zone (names, IDs, device class auto-detection) |
-| **Arm Failure Detection** | Fires HA event when arming fails, enabling bypass notification automations |
+| **Arm Failure Detection** | WebSocket feedback detects exact open zones when arming fails; fires HA event with zone names |
+| **Retry Arm with Bypass** | One-call service to re-arm with the detected open zones automatically bypassed |
 | **Event Entity** | Native HA event entity that fires on alarm events |
 | **System Faults** | Sensor showing active system faults |
 | **Multi-Device Fix** | Shared API client prevents token conflicts when using multiple alarms on one account |
@@ -93,13 +94,36 @@ data:
 | `bypass_zones` | list of integers | Zone IDs to bypass (find IDs in zone entity attributes) |
 | `bypass_all` | boolean | Bypass all non-disabled zones |
 
+### Service: `eldes_alarm.retry_arm_with_bypass`
+
+Re-arm the partition that last failed, automatically bypassing the zones that were reported as active. No parameters needed -- the integration stores the failure context (partition, arm mode, and exact zone IDs) internally.
+
+```yaml
+action: eldes_alarm.retry_arm_with_bypass
+data: {}
+```
+
+The stored context expires after **120 seconds**. If you call this service after the context has expired, it will log a warning and do nothing.
+
+### Arm Failure Detection (WebSocket)
+
+When you arm the alarm and zones are violated (e.g., a door is open), the integration opens a short-lived WebSocket connection to the Eldes Cloud to capture the **exact list of open zone names**. This information is:
+
+1. Fired as an `eldes_alarm_arm_failed` HA event with `active_zones` (list of zone names)
+2. Stored internally for use by `retry_arm_with_bypass`
+
+The WebSocket is only active for ~10 seconds during the arm command and is immediately closed afterwards. It does not maintain a persistent connection.
+
 ### Bypass Notification Automation
 
-When arming fails (e.g., a door is open), the integration fires an `eldes_alarm_arm_failed` event. You can use this to send an actionable notification to your phone with a "Bypass & Arm" button.
+An example automation is provided in [`docs/automations/bypass_notification.yaml`](docs/automations/bypass_notification.yaml). It uses a single automation with `trigger_id` to handle both:
 
-An example automation is provided in [`docs/automations/bypass_notification.yaml`](docs/automations/bypass_notification.yaml). To use it:
+- **`arm_failed`** -- sends an actionable notification listing the exact open zone names
+- **`bypass_confirmed`** -- calls `retry_arm_with_bypass` when the user taps "Bypass & Arm"
 
-1. Copy the automation into your `automations.yaml` or the HA automation editor
+To use it:
+
+1. Copy the automation into the HA automation editor (or `automations.yaml`)
 2. Replace `notify.mobile_app_YOUR_PHONE` with your actual notification service
 3. Reload automations
 
@@ -147,7 +171,7 @@ Use these in automations via the `state_changed` trigger on the event entity.
 - **Zones not appearing?** Make sure the integration has restarted after updating. Zones are fetched from the `device/list-zones` API endpoint.
 - **Bypass not working?** Verify the zone IDs match what the API returns (check the `zone_id` attribute on binary sensor entities).
 - **Events missing?** The events endpoint may return empty for some devices. Check HA logs with `logger` set to `debug` for `custom_components.eldes_alarm`.
-- **One alarm going unavailable?** If you have multiple alarms on the same account, make sure you are on v2.1.1+ which shares a single API session. Older versions created separate sessions that invalidated each other's tokens.
+- **One alarm going unavailable?** If you have multiple alarms on the same account, make sure you are on v2.1.2+ which shares a single API session. Older versions created separate sessions that invalidated each other's tokens.
 - **Token refresh errors?** The integration automatically falls back to a full re-login if token refresh fails. If you see persistent auth errors, verify your credentials in the integration options.
 
 ## License
@@ -157,4 +181,4 @@ This project is licensed under the MIT License -- see [LICENSE](LICENSE) for det
 ## Credits
 
 - Original integration by [@augustas2](https://github.com/augustas2) -- [augustas2/eldes](https://github.com/augustas2/eldes)
-- Zone bypass, zone sensors, event entities, system fault monitoring, multi-device fix, and arm failure detection by [@simie7](https://github.com/simie7)
+- Zone bypass, zone sensors, event entities, system fault monitoring, multi-device fix, WebSocket arm failure detection, and retry-with-bypass service by [@simie7](https://github.com/simie7)
