@@ -343,8 +343,11 @@ class EldesCloud:
         return result.get("temperatureDetailsList", [])
 
     async def get_events(self, imei, size):
-        data = {"imei": imei, "size": size, "start": 0, "pin": self._pin}
-        url = f"{API_URL}{API_PATHS['DEVICE']}event/list"
+        # IMEI must be a query parameter (cloud started enforcing this on
+        # 2026-05-07; sending it in the body returns HTTP 400
+        # `error.unexpected`).
+        data = {"size": size, "start": 0, "pin": self._pin}
+        url = f"{API_URL}{API_PATHS['DEVICE']}event/list?imei={imei}"
         try:
             response = await self._safe_api_call(url, "POST", data)
             result = await response.json()

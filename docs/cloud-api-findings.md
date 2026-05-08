@@ -29,7 +29,7 @@ Login returns `{ "token", "refreshToken" }`. Tokens expire after ~5 minutes.
 | `device/partition/list?imei={imei}` | POST | Body: `{ "imei", "pin" }`. Returns `{ "partitions": [...] }` |
 | `device/list-outputs/{imei}` | POST | Body: `{ "imei", "pin" }`. Returns `{ "deviceOutputs": [...] }` |
 | `device/temperatures?imei={imei}` | POST | Body: `{ "pin" }`. Returns `{ "temperatureDetailsList": [...] }` |
-| `device/event/list` | POST | Body: `{ "imei", "size", "start", "pin" }`. Returns `{ "eventDetails": [...] }` |
+| `device/event/list?imei={imei}` | POST | Body: `{ "size", "start", "pin" }`. Returns `{ "userUniqueId", "eventDetails": [...] }`. Cloud rejects body-only IMEI with HTTP 400 `error.unexpected` since the 2026-05-07 maintenance window. |
 
 ### Zone List (NEW - discovered via APK decompilation)
 
