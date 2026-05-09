@@ -95,9 +95,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Fetch data for selected Eldes device."""
         try:
             await eldes_client.renew_token()
-            return [await async_fetch_device_data(eldes_client, selected_imei, entry)]
+            previous = coordinator.data[0] if coordinator.data else None
+            return [await async_fetch_device_data(eldes_client, selected_imei, entry, previous)]
         except Exception as ex:
-            _LOGGER.exception("Failed to update Eldes device data: %s", ex)
+            _LOGGER.warning("Failed to update Eldes device data: %s", ex)
             raise UpdateFailed(ex) from ex
 
     coordinator = DataUpdateCoordinator(
@@ -227,11 +228,25 @@ def _all_zone_ids(device: dict) -> list:
     return [z.get("zoneId") for z in device.get("zones", []) if not z.get("disabled", False)]
 
 
-async def async_fetch_device_data(eldes_client: EldesCloud, imei: str, entry: ConfigEntry) -> dict:
-    """Fetch full data for a single Eldes device. Each call is resilient to failures."""
+async def async_fetch_device_data(
+    eldes_client: EldesCloud,
+    imei: str,
+    entry: ConfigEntry,
+    previous: dict | None = None,
+) -> dict:
+    """Fetch full data for a single Eldes device.
+
+    Each call is resilient to transient failures: when an individual API call
+    fails, the previous coordinator value for that key is reused so entities
+    that index into ``zones``/``partitions``/``outputs``/``temp`` keep working
+    instead of crashing with IndexError. Only when there is no previous value
+    (first refresh) do we fall back to an empty list / default info.
+    """
     events_list_size = entry.options.get(CONF_EVENTS_LIST_SIZE, DEFAULT_EVENTS_LIST_SIZE)
 
     device = {"imei": imei, "active_zones": []}
+    if previous:
+        device["active_zones"] = previous.get("active_zones", [])
 
     for key, coro in [
         ("info", eldes_client.get_device_info(imei)),
@@ -245,8 +260,15 @@ async def async_fetch_device_data(eldes_client: EldesCloud, imei: str, entry: Co
         try:
             device[key] = await coro
         except Exception as ex:
-            _LOGGER.warning("Failed to fetch %s for %s: %s", key, imei, ex)
-            device[key] = dict(DEFAULT_DEVICE_INFO) if key == "info" else []
+            if previous and key in previous:
+                device[key] = previous[key]
+                _LOGGER.warning(
+                    "Failed to fetch %s for %s (%s); reusing last-known-good value",
+                    key, imei, ex,
+                )
+            else:
+                _LOGGER.warning("Failed to fetch %s for %s: %s", key, imei, ex)
+                device[key] = dict(DEFAULT_DEVICE_INFO) if key == "info" else []
 
     return device
 
